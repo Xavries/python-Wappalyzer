@@ -1,5 +1,4 @@
 import pytest
-import requests
 import json
 import os
 
@@ -13,7 +12,7 @@ from aioresponses import aioresponses
 from Wappalyzer.fingerprint import Fingerprint
 from Wappalyzer import WebPage, Wappalyzer
 from Wappalyzer.__main__ import get_parser, main
-
+from Wappalyzer.data.update import get_technology_data
 @pytest.fixture
 def async_mock():
     with aioresponses() as m:
@@ -48,12 +47,12 @@ def test_latest():
 def test_latest_update(tmp_path: Path):
     
     # Get the lastest file
-    lastest_technologies_file=requests.get('https://raw.githubusercontent.com/AliasIO/wappalyzer/master/src/technologies.json')
+    lastest_technologies_dict=get_technology_data()
     
     tmp_file = tmp_path.joinpath('technologies.json')
     # Write the content to a tmp file
     with tmp_file.open('w', encoding='utf-8') as t_file:
-        t_file.write(lastest_technologies_file.text)
+        t_file.write(str(lastest_technologies_dict))
 
     # Create Wappalyzer with this file in argument
     wappalyzer1=Wappalyzer.latest(technologies_file=str(tmp_file))

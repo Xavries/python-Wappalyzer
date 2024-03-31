@@ -1,0 +1,10 @@
+aiohttp==3.9.3
+aioresponses==0.7.6
+beautifulsoup4==4.12.3
+cached_property==1.5.2
+dom_query==0.0.4
+httpretty==1.1.4
+lxml==5.1.1
+pytest==8.1.1
+Requests==2.31.0
+setuptools==68.2.2
