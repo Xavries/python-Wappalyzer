@@ -1,4 +1,4 @@
-python-Wappalyzer
+Renewed python-Wappalyzer
 -----------------
 
 .. image:: https://travis-ci.org/chorsley/python-Wappalyzer.svg?branch=master
