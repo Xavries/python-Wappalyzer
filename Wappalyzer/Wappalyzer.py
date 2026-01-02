@@ -5,9 +5,8 @@ import pkg_resources
 import re
 import os
 import pathlib
-import requests
+import signal
 
-from datetime import datetime, timedelta
 from typing import Optional
 
 from Wappalyzer.fingerprint import Fingerprint, Pattern, Technology, Category
@@ -192,15 +191,19 @@ class Wappalyzer:
         # HTML for last
 
         # analyze url patterns
+        # print(f"Analyzing URL patterns for technology {tech_fingerprint.name}")
         for pattern in tech_fingerprint.url:
             if pattern.regex.search(webpage.url):
                 self._set_detected_app(
                     webpage.url, tech_fingerprint, "url", pattern, value=webpage.url
                 )
         # analyze headers patterns
+        # print(f"Analyzing headers patterns for technology {tech_fingerprint.name}")
         for name, patterns in list(tech_fingerprint.headers.items()):
             if name in webpage.headers:
                 content = webpage.headers[name]
+                if len(content) == 0 or len(content) > 10000:
+                    continue
                 for pattern in patterns:
                     if pattern.regex.search(content):
                         self._set_detected_app(
@@ -213,17 +216,23 @@ class Wappalyzer:
                         )
                         has_tech = True
         # analyze scripts patterns
+        # print(f"Analyzing scripts patterns for technology {tech_fingerprint.name}")
         for pattern in tech_fingerprint.scripts:
             for script in webpage.scripts:
+                if len(script) == 0 or len(script) > 10000:
+                    continue
                 if pattern.regex.search(script):
                     self._set_detected_app(
                         webpage.url, tech_fingerprint, "scripts", pattern, value=script
                     )
                     has_tech = True
         # analyze meta patterns
+        # print(f"Analyzing meta patterns for technology {tech_fingerprint.name}")
         for name, patterns in list(tech_fingerprint.meta.items()):
             if name in webpage.meta:
                 content = webpage.meta[name]
+                if len(content) == 0 or len(content) > 10000:
+                    continue
                 for pattern in patterns:
                     if pattern.regex.search(content):
                         self._set_detected_app(
@@ -236,60 +245,178 @@ class Wappalyzer:
                         )
                         has_tech = True
         # analyze html patterns
+        # print(f"Analyzing HTML patterns for technology {tech_fingerprint.name}")
         for pattern in tech_fingerprint.html:
+            if len(webpage.html) == 0 or len(webpage.html) > 10000:
+                continue
             if pattern.regex.search(webpage.html):
                 self._set_detected_app(
                     webpage.url, tech_fingerprint, "html", pattern, value=webpage.html
                 )
                 has_tech = True
         # analyze dom patterns
+        # print(f"Analyzing DOM patterns for technology {tech_fingerprint.name}")
         # css selector, list of css selectors, or dict from css selector to dict with some of keys:
         #           - "exists": "": only check if the selector matches somthing, equivalent to the list form.
         #           - "text": "regex": check if the .innerText property of the element that matches the css selector matches the regex (with version extraction).
         #           - "attributes": {dict from attr name to regex}: check if the attribute value of the element that matches the css selector matches the regex (with version extraction).
-        for selector in tech_fingerprint.dom:
-            for item in webpage.select(selector.selector):
-                if selector.exists:
-                    self._set_detected_app(
-                        webpage.url,
-                        tech_fingerprint,
-                        "dom",
-                        Pattern(string=selector.selector),
-                        value="",
+        # analyze dom patterns signal
+        selector_unique_check_set = list()
+        try:
+            for idx, selector in enumerate(tech_fingerprint.dom):
+                print(
+                    f"Processing DOM selector {idx+1}/{len(tech_fingerprint.dom)}: {selector.selector[:100]}"
+                )
+
+                try:
+                    # Add timeout for select operation
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("Selector search timed out")
+
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(5)  # 5 second timeout for selector
+
+                    try:
+                        items = list(webpage.select(selector.selector))
+                        signal.alarm(0)  # Cancel alarm
+                    except TimeoutError:
+                        signal.alarm(0)
+                        print(f"⚠️  Timeout on selector: {selector.selector[:100]}")
+                        continue
+                    except Exception as e:
+                        signal.alarm(0)
+                        print(f"Error selecting elements: {e}")
+                        continue
+
+                    print(
+                        f"Found {len(items)} elements for selector: {selector.selector[:100]}"
                     )
-                    has_tech = True
-                if selector.text:
-                    for pattern in selector.text:
-                        if pattern.regex.search(item.inner_html):
+
+                    for item_idx, item in enumerate(items):
+                        if item_idx > 100:  # Limit number of items processed
+                            print(f"Skipping remaining items (processed 100)")
+                            break
+
+                        inner_html_len = len(item.inner_html)
+                        print(
+                            f"Processing item {item_idx+1}/{len(items)} with inner_html length {inner_html_len}"
+                        )
+
+                        if selector.exists:
                             self._set_detected_app(
                                 webpage.url,
                                 tech_fingerprint,
                                 "dom",
-                                pattern,
-                                value=item.inner_html,
+                                Pattern(string=selector.selector),
+                                value="",
                             )
                             has_tech = True
-                if selector.attributes:
-                    for attrname, patterns in list(selector.attributes.items()):
-                        _content = item.attributes.get(attrname)
-                        if _content:
-                            if not isinstance(_content, str):
-                                print("_content", _content)
-                            _content = (
-                                " ".join(_content)
-                                if isinstance(_content, list)
-                                else _content
-                            )
-                            for pattern in patterns:
-                                if pattern.regex.search(_content):
-                                    self._set_detected_app(
-                                        webpage.url,
-                                        tech_fingerprint,
-                                        "dom",
-                                        pattern,
-                                        value=_content,
+                        if selector.text:
+                            for pattern in selector.text:
+                                if inner_html_len == 0 or inner_html_len > 10000:
+                                    continue
+                                # print(
+                                #     f"selector.text pattern: {pattern.regex}. item.inner_html = {item.inner_html[:100]}"
+                                # )
+
+                                # Check if pattern is simple (anchored exact match)
+                                pattern_str = pattern.regex.pattern
+                                is_anchored = pattern_str.startswith(
+                                    "^"
+                                ) and pattern_str.endswith("$")
+
+                                if is_anchored:
+                                    # For anchored patterns like ^Pleroma$, use simple string comparison
+                                    search_str = pattern_str[1:-1]  # Remove ^ and $
+                                    # print(
+                                    #     f"Using simple string comparison for anchored pattern: {search_str}"
+                                    # )
+
+                                    # Check case-insensitive if IGNORECASE flag is set
+                                    match = (
+                                        item.inner_html.strip().lower()
+                                        == search_str.lower()
                                     )
-                                    has_tech = True
+
+                                    if match:
+                                        # print(f"Match found with simple comparison")
+                                        self._set_detected_app(
+                                            webpage.url,
+                                            tech_fingerprint,
+                                            "dom",
+                                            pattern,
+                                            value=item.inner_html,
+                                        )
+                                        has_tech = True
+                                    # else:
+                                    #     print(f"No match found with simple comparison")
+                                else:
+                                    # For non-anchored patterns, use regex
+                                    # print(
+                                    #     f"Using regex search for pattern: {pattern_str[:50]}"
+                                    # )
+                                    try:
+                                        if pattern.regex.search(item.inner_html):
+                                            self._set_detected_app(
+                                                webpage.url,
+                                                tech_fingerprint,
+                                                "dom",
+                                                pattern,
+                                                value=item.inner_html,
+                                            )
+                                            has_tech = True
+                                    except Exception as e:
+                                        print(f"Error in regex search: {e}")
+                        if selector.attributes:
+                            # print(
+                            #     f"Analyzing attributes for selector {selector.selector[:50]}"
+                            # )
+                            for attrname, patterns in list(selector.attributes.items()):
+                                check_str = f"{selector.text} {attrname} {[str(i.regex) for i in patterns]}"
+                                if check_str in selector_unique_check_set:
+                                    continue
+                                # print(
+                                #     f"selector_unique_check_set length: {len(selector_unique_check_set)}"
+                                # )
+                                selector_unique_check_set.append(check_str)
+                                # print(f"checking attribute {attrname} for patterns {check_str[:100]}")
+                                _content = item.attributes.get(attrname)
+                                if _content and len(_content) < 10000:
+                                    # if not isinstance(_content, str):
+                                    #     print("_content", _content)
+                                    _content = (
+                                        " ".join(_content)
+                                        if isinstance(_content, list)
+                                        else _content
+                                    )
+                                    if "video" in _content:
+                                        print(
+                                            f"skipping video content {_content[:100]}"
+                                        )
+                                        continue
+                                    for pattern in patterns:
+                                        # print(f"checking pattern {pattern.regex} for content {_content[:100]}")
+                                        try:
+                                            if pattern.regex.search(_content):
+                                                self._set_detected_app(
+                                                    webpage.url,
+                                                    tech_fingerprint,
+                                                    "dom",
+                                                    pattern,
+                                                    value=_content,
+                                                )
+                                                has_tech = True
+                                        except Exception as e:
+                                            print(
+                                                f"Error in attribute regex search: {e}"
+                                            )
+                except Exception as e:
+                    print(f"Error processing selector {selector.selector[:100]}: {e}")
+                    continue
+        except Exception as e:
+            print(f"Error in DOM analysis: {e}")
+
+        # print(f"has_tech: {has_tech} for technology {tech_fingerprint.name}")
         return has_tech
 
     def _set_detected_app(
@@ -327,7 +454,7 @@ class Wappalyzer:
                 version = pattern.version
                 # Check for a string to avoid enumerating the string
                 if isinstance(matches, str):
-                    matches = [(matches)]
+                    matches = [matches]
                 for index, match in enumerate(matches):
                     # Parse ternary operator
                     ternary = re.search(
@@ -446,15 +573,19 @@ class Wappalyzer:
 
         :param webpage: The Webpage to analyze
         """
+        print(f"Analyzing webpage: {webpage.url}")
         detected_technologies = set()
 
         for tech_name, technology in list(self.technologies.items()):
             if self._has_technology(technology, webpage):
                 detected_technologies.add(tech_name)
 
+        print(f"Initially detected technologies: {detected_technologies}")
         detected_technologies.update(
             self._get_implied_technologies(detected_technologies)
         )
+        print(f"Initially detected technologies: {detected_technologies}")
+        print(f"Total: {len(detected_technologies)} technologies")
 
         return detected_technologies
 
