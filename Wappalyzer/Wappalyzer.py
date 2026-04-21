@@ -551,6 +551,9 @@ class Wappalyzer:
             all_implied_technologies.update(implied_technologies)
             implied_technologies = __get_implied_technologies(all_implied_technologies)
 
+        print(
+            f"Implied technologies len: {len(all_implied_technologies)}, self.technologies len: {len(self.technologies)}"
+        )
         return all_implied_technologies
 
     def get_categories(self, tech_name: str) -> List[str]:
