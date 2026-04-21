@@ -77,6 +77,9 @@ class Wappalyzer:
         self._technology_timeout_seconds = 10
         self._dom_selector_limit = 400
         self._dom_time_budget_seconds = 3.0
+        self._analyze_time_budget_seconds = 45.0
+        self._technology_scan_limit = 2000
+        self._debug_dom_progress = False
 
         self._confidence_regexp = re.compile(r"(.+)\\;confidence:(\d+)")
 
@@ -329,18 +332,21 @@ class Wappalyzer:
                 try:
                     items = list(webpage.select(_sel.selector))
                     local_has_tech = False
-                    print(
-                        f"[debug] selector-start len(items)={len(items)} selector={_sel.selector[:120]}"
-                    )
+                    if self._debug_dom_progress:
+                        print(
+                            f"[debug] selector-start len(items)={len(items)} selector={_sel.selector[:120]}"
+                        )
                     for item_idx, item in enumerate(items):
                         if item_idx > 100:  # Limit number of items processed
-                            print(
-                                f"[debug] item-limit-hit item_idx={item_idx} selector={_sel.selector[:120]}"
-                            )
+                            if self._debug_dom_progress:
+                                print(
+                                    f"[debug] item-limit-hit item_idx={item_idx} selector={_sel.selector[:120]}"
+                                )
                             print(f"Skipping remaining items (processed 100)")
-                            print(
-                                f"[debug] breaking-item-loop selector={_sel.selector[:120]}"
-                            )
+                            if self._debug_dom_progress:
+                                print(
+                                    f"[debug] breaking-item-loop selector={_sel.selector[:120]}"
+                                )
                             break
                         try:
                             inner_html = item.inner_html
@@ -402,7 +408,10 @@ class Wappalyzer:
                                             local_has_tech = True
                                     except re.error as e:
                                         print(f"Regex error in dom attr: {e}")
-                    print(f"[debug] selector-loop-exit selector={_sel.selector[:120]}")
+                    if self._debug_dom_progress:
+                        print(
+                            f"[debug] selector-loop-exit selector={_sel.selector[:120]}"
+                        )
                     if local_has_tech:
                         _out.append(True)
                 except Exception as e:
@@ -593,8 +602,25 @@ class Wappalyzer:
         """
         print(f"Analyzing webpage: {webpage.url}")
         detected_technologies = set()
+        analyze_start = time.monotonic()
 
-        for tech_name, technology in list(self.technologies.items()):
+        for tech_idx, (tech_name, technology) in enumerate(
+            list(self.technologies.items())
+        ):
+            if tech_idx >= self._technology_scan_limit:
+                print(
+                    f"Stopping analyze: technology scan limit reached "
+                    f"({self._technology_scan_limit})"
+                )
+                break
+
+            if (time.monotonic() - analyze_start) > self._analyze_time_budget_seconds:
+                print(
+                    f"Stopping analyze: time budget reached "
+                    f"({self._analyze_time_budget_seconds}s)"
+                )
+                break
+
             self._zombie_threads = [t for t in self._zombie_threads if t.is_alive()]
             if len(self._zombie_threads) >= self._zombie_thread_cap:
                 print(
