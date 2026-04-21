@@ -7,6 +7,7 @@ import os
 import pathlib
 import threading
 import signal
+import time
 
 from typing import Optional
 
@@ -74,6 +75,8 @@ class Wappalyzer:
         self._zombie_threads: List[threading.Thread] = []
         self._zombie_thread_cap = 10
         self._technology_timeout_seconds = 10
+        self._dom_selector_limit = 400
+        self._dom_time_budget_seconds = 3.0
 
         self._confidence_regexp = re.compile(r"(.+)\\;confidence:(\d+)")
 
@@ -298,7 +301,20 @@ class Wappalyzer:
             )
             return has_tech
 
-        for selector in tech_fingerprint.dom:
+        _dom_start_time = time.monotonic()
+        for idx, selector in enumerate(tech_fingerprint.dom):
+            if idx >= self._dom_selector_limit:
+                print(
+                    f"Stopping DOM checks for {tech_fingerprint.name}: "
+                    f"selector limit reached ({self._dom_selector_limit})"
+                )
+                break
+            if (time.monotonic() - _dom_start_time) > self._dom_time_budget_seconds:
+                print(
+                    f"Stopping DOM checks for {tech_fingerprint.name}: "
+                    f"time budget reached ({self._dom_time_budget_seconds}s)"
+                )
+                break
             # Collect matches from the thread; list is written by the worker
             # and read by the main thread only after join(), so no lock needed.
             _matches: List[bool] = []  # [has_tech_result]
