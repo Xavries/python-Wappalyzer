@@ -602,8 +602,11 @@ class Wappalyzer:
         print(f"Analyzing webpage: {webpage.url}")
         detected_technologies = set()
         analyze_start = time.monotonic()
+        len_techs = len(self.technologies)
 
-        for tech_name, technology in self.technologies.items():
+        for tech_idx, (tech_name, technology) in enumerate(
+            list(self.technologies.items())
+        ):
 
             if (time.monotonic() - analyze_start) > self._analyze_time_budget_seconds:
                 print(
@@ -671,6 +674,10 @@ class Wappalyzer:
                     continue
                 if _result[0]:
                     detected_technologies.add(tech_name)
+            if (tech_idx + 1) % 500 == 0:
+                print(
+                    f"Progress: {tech_idx + 1}/{len_techs} technologies analyzed. Currently detected technologies: {detected_technologies}"
+                )
 
         print(f"Initially detected technologies: {detected_technologies}")
         detected_technologies.update(
