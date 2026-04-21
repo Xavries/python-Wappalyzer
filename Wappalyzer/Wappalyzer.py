@@ -295,35 +295,26 @@ class Wappalyzer:
                 f"threads already active (cap={self._zombie_thread_cap})"
             )
             return has_tech
-        try:
-            for idx, selector in enumerate(tech_fingerprint.dom):
+
+        for selector in tech_fingerprint.dom:
+            # Collect matches from the thread; list is written by the worker
+            # and read by the main thread only after join(), so no lock needed.
+            _matches: List[bool] = []  # [has_tech_result]
+            _exc: List[Exception] = []
+
+            def _process_selector(
+                _sel=selector,
+                _ucs=selector_unique_check_set,
+                _out=_matches,
+                _err=_exc,
+            ):
                 try:
-                    _result: List[Any] = []
-                    _exc: List[Exception] = []
-
-                    def _do_select(_sel=selector.selector, _out=_result, _err=_exc):
-                        try:
-                            _out.extend(webpage.select(_sel))
-                        except Exception as e:
-                            _err.append(e)
-
-                    _t = threading.Thread(target=_do_select, daemon=True)
-                    _t.start()
-                    _t.join(timeout=5)
-                    if _t.is_alive():
-                        self._zombie_threads.append(_t)
-                        print(f"Timeout on selector: {selector.selector[:100]}")
-                        continue
-                    if _exc:
-                        print(f"Error selecting elements: {_exc[0]}")
-                        continue
-                    items = _result
-
+                    items = list(webpage.select(_sel.selector))
+                    local_has_tech = False
                     for item_idx, item in enumerate(items):
                         if item_idx > 100:  # Limit number of items processed
                             print(f"Skipping remaining items (processed 100)")
                             break
-
                         try:
                             inner_html = item.inner_html
                         except Exception as e:
@@ -331,17 +322,10 @@ class Wappalyzer:
                             continue
                         inner_html_len = len(inner_html)
 
-                        if selector.exists:
-                            self._set_detected_app(
-                                webpage.url,
-                                tech_fingerprint,
-                                "dom",
-                                Pattern(string=selector.selector),
-                                value="",
-                            )
-                            has_tech = True
-                        if selector.text:
-                            for pattern in selector.text:
+                        if _sel.exists:
+                            local_has_tech = True
+                        if _sel.text:
+                            for pattern in _sel.text:
                                 if inner_html_len == 0 or inner_html_len > 10000:
                                     continue
                                 # print(
@@ -353,31 +337,11 @@ class Wappalyzer:
                                 is_anchored = pattern_str.startswith(
                                     "^"
                                 ) and pattern_str.endswith("$")
-
                                 if is_anchored:
-                                    # For anchored patterns like ^Pleroma$, use simple string comparison
-                                    search_str = pattern_str[1:-1]  # Remove ^ and $
-                                    # print(
-                                    #     f"Using simple string comparison for anchored pattern: {search_str}"
-                                    # )
-
-                                    # Check case-insensitive if IGNORECASE flag is set
-                                    match = (
-                                        inner_html.strip().lower() == search_str.lower()
-                                    )
-
-                                    if match:
-                                        # print(f"Match found with simple comparison")
-                                        self._set_detected_app(
-                                            webpage.url,
-                                            tech_fingerprint,
-                                            "dom",
-                                            pattern,
-                                            value=inner_html,
-                                        )
-                                        has_tech = True
-                                    # else:
-                                    #     print(f"No match found with simple comparison")
+                                    search_str = pattern_str[1:-1]
+                                    if inner_html.strip().lower() == search_str.lower():
+                                        _out.append(True)  # signal set_detected_app
+                                        local_has_tech = True
                                 else:
                                     # For non-anchored patterns, use regex
                                     # print(
@@ -385,64 +349,58 @@ class Wappalyzer:
                                     # )
                                     try:
                                         if pattern.regex.search(inner_html):
-                                            self._set_detected_app(
-                                                webpage.url,
-                                                tech_fingerprint,
-                                                "dom",
-                                                pattern,
-                                                value=inner_html,
-                                            )
-                                            has_tech = True
-                                    except Exception as e:
-                                        print(f"Error in regex search: {e}")
-                        if selector.attributes:
-                            # print(
-                            #     f"Analyzing attributes for selector {selector.selector[:50]}"
-                            # )
-                            for attrname, patterns in list(selector.attributes.items()):
-                                check_str = f"{selector.text} {attrname} {[str(i.regex) for i in patterns]}"
-                                if check_str in selector_unique_check_set:
+                                            _out.append(True)
+                                            local_has_tech = True
+                                    except re.error as e:
+                                        print(f"Regex error in dom text: {e}")
+                        if _sel.attributes:
+                            for attrname, patterns in list(_sel.attributes.items()):
+                                check_str = f"{_sel.selector} {attrname} {[str(i.regex) for i in patterns]}"
+                                if check_str in _ucs:
                                     continue
-                                # print(
-                                #     f"selector_unique_check_set length: {len(selector_unique_check_set)}"
-                                # )
-                                selector_unique_check_set.add(check_str)
-                                # print(f"checking attribute {attrname} for patterns {check_str[:100]}")
+                                _ucs.add(check_str)
                                 _content = item.attributes.get(attrname)
-                                if _content:
-                                    _content = (
-                                        " ".join(_content)
-                                        if isinstance(_content, list)
-                                        else _content
-                                    )
-                                    if not _content or len(_content) > 10000:
-                                        continue
-                                    if "video" in _content:
-                                        print(
-                                            f"skipping video content {_content[:100]}"
-                                        )
-                                        continue
-                                    for pattern in patterns:
-                                        # print(f"checking pattern {pattern.regex} for content {_content[:100]}")
-                                        try:
-                                            if pattern.regex.search(_content):
-                                                self._set_detected_app(
-                                                    webpage.url,
-                                                    tech_fingerprint,
-                                                    "dom",
-                                                    pattern,
-                                                    value=_content,
-                                                )
-                                                has_tech = True
-                                        except Exception as e:
-                                            print(
-                                                f"Error in attribute regex search: {e}"
-                                            )
+                                if not _content:
+                                    continue
+                                if isinstance(_content, list):
+                                    _content = " ".join(_content)
+                                if not _content or len(_content) > 10000:
+                                    continue
+                                if "video" in _content:
+                                    continue
+                                for pattern in patterns:
+                                    try:
+                                        if pattern.regex.search(_content):
+                                            _out.append(True)
+                                            local_has_tech = True
+                                    except re.error as e:
+                                        print(f"Regex error in dom attr: {e}")
+                    if local_has_tech:
+                        _out.append(True)
                 except Exception as e:
-                    print(f"Error processing selector {selector.selector[:100]}: {e}")
-                    continue
-        except Exception as e:
-            print(f"Error in DOM analysis: {e}")
+                    _err.append(e)
+
+            _t = threading.Thread(target=_process_selector, daemon=True)
+            _t.start()
+            _t.join(timeout=5)
+            if _t.is_alive():
+                self._zombie_threads.append(_t)
+                print(f"Timeout on selector: {selector.selector[:100]}")
+                continue
+            if _exc:
+                print(f"Error in selector {selector.selector[:100]}: {_exc[0]}")
+                continue
+            if _matches:
+                # Record the detection — done in main thread to avoid races on
+                # self.detected_technologies
+                self._set_detected_app(
+                    webpage.url,
+                    tech_fingerprint,
+                    "dom",
+                    Pattern(string=selector.selector),
+                    value="",
+                )
+                has_tech = True
 
         # print(f"has_tech: {has_tech} for technology {tech_fingerprint.name}")
         return has_tech
