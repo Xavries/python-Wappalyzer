@@ -72,6 +72,7 @@ class Wappalyzer:
         self.detected_technologies: Dict[str, Dict[str, Technology]] = {}
         self._zombie_threads: List[threading.Thread] = []
         self._zombie_thread_cap = 10
+        self._technology_timeout_seconds = 10
 
         self._confidence_regexp = re.compile(r"(.+)\\;confidence:(\d+)")
 
@@ -567,7 +568,39 @@ class Wappalyzer:
         detected_technologies = set()
 
         for tech_name, technology in list(self.technologies.items()):
-            if self._has_technology(technology, webpage):
+            self._zombie_threads = [t for t in self._zombie_threads if t.is_alive()]
+            if len(self._zombie_threads) >= self._zombie_thread_cap:
+                print(
+                    f"Skipping remaining technologies: {len(self._zombie_threads)} "
+                    f"hung worker threads already active "
+                    f"(cap={self._zombie_thread_cap})"
+                )
+                break
+
+            _result: List[bool] = [False]
+            _exc: List[Exception] = []
+
+            def _check_technology(_out=_result, _err=_exc):
+                try:
+                    _out[0] = self._has_technology(technology, webpage)
+                except Exception as e:
+                    _err.append(e)
+
+            _t = threading.Thread(target=_check_technology, daemon=True)
+            _t.start()
+            _t.join(timeout=self._technology_timeout_seconds)
+
+            if _t.is_alive():
+                self._zombie_threads.append(_t)
+                print(
+                    f"Timeout processing technology {tech_name} "
+                    f"after {self._technology_timeout_seconds}s"
+                )
+                continue
+            if _exc:
+                print(f"Error processing technology {tech_name}: {_exc[0]}")
+                continue
+            if _result[0]:
                 detected_technologies.add(tech_name)
 
         print(f"Initially detected technologies: {detected_technologies}")
