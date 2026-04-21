@@ -5,7 +5,7 @@ import pkg_resources
 import re
 import os
 import pathlib
-import signal
+import concurrent.futures
 
 from typing import Optional
 
@@ -70,6 +70,7 @@ class Wappalyzer:
             k: Fingerprint(name=k, **v) for k, v in technologies.items()
         }
         self.detected_technologies: Dict[str, Dict[str, Technology]] = {}
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
         self._confidence_regexp = re.compile(r"(.+)\\;confidence:(\d+)")
 
@@ -193,10 +194,13 @@ class Wappalyzer:
         # analyze url patterns
         # print(f"Analyzing URL patterns for technology {tech_fingerprint.name}")
         for pattern in tech_fingerprint.url:
-            if pattern.regex.search(webpage.url):
-                self._set_detected_app(
-                    webpage.url, tech_fingerprint, "url", pattern, value=webpage.url
-                )
+            try:
+                if pattern.regex.search(webpage.url):
+                    self._set_detected_app(
+                        webpage.url, tech_fingerprint, "url", pattern, value=webpage.url
+                    )
+            except re.error as e:
+                print(f"Regex error in url pattern: {e}")
         # analyze headers patterns
         # print(f"Analyzing headers patterns for technology {tech_fingerprint.name}")
         for name, patterns in list(tech_fingerprint.headers.items()):
@@ -205,27 +209,37 @@ class Wappalyzer:
                 if len(content) == 0 or len(content) > 10000:
                     continue
                 for pattern in patterns:
-                    if pattern.regex.search(content):
-                        self._set_detected_app(
-                            webpage.url,
-                            tech_fingerprint,
-                            "headers",
-                            pattern,
-                            value=content,
-                            key=name,
-                        )
-                        has_tech = True
+                    try:
+                        if pattern.regex.search(content):
+                            self._set_detected_app(
+                                webpage.url,
+                                tech_fingerprint,
+                                "headers",
+                                pattern,
+                                value=content,
+                                key=name,
+                            )
+                            has_tech = True
+                    except re.error as e:
+                        print(f"Regex error in headers pattern: {e}")
         # analyze scripts patterns
         # print(f"Analyzing scripts patterns for technology {tech_fingerprint.name}")
         for pattern in tech_fingerprint.scripts:
             for script in webpage.scripts:
                 if len(script) == 0 or len(script) > 10000:
                     continue
-                if pattern.regex.search(script):
-                    self._set_detected_app(
-                        webpage.url, tech_fingerprint, "scripts", pattern, value=script
-                    )
-                    has_tech = True
+                try:
+                    if pattern.regex.search(script):
+                        self._set_detected_app(
+                            webpage.url,
+                            tech_fingerprint,
+                            "scripts",
+                            pattern,
+                            value=script,
+                        )
+                        has_tech = True
+                except re.error as e:
+                    print(f"Regex error in scripts pattern: {e}")
         # analyze meta patterns
         # print(f"Analyzing meta patterns for technology {tech_fingerprint.name}")
         for name, patterns in list(tech_fingerprint.meta.items()):
@@ -234,26 +248,36 @@ class Wappalyzer:
                 if len(content) == 0 or len(content) > 10000:
                     continue
                 for pattern in patterns:
-                    if pattern.regex.search(content):
-                        self._set_detected_app(
-                            webpage.url,
-                            tech_fingerprint,
-                            "meta",
-                            pattern,
-                            value=content,
-                            key=name,
-                        )
-                        has_tech = True
+                    try:
+                        if pattern.regex.search(content):
+                            self._set_detected_app(
+                                webpage.url,
+                                tech_fingerprint,
+                                "meta",
+                                pattern,
+                                value=content,
+                                key=name,
+                            )
+                            has_tech = True
+                    except re.error as e:
+                        print(f"Regex error in meta pattern: {e}")
         # analyze html patterns
         # print(f"Analyzing HTML patterns for technology {tech_fingerprint.name}")
         for pattern in tech_fingerprint.html:
             if len(webpage.html) == 0 or len(webpage.html) > 10000:
                 continue
-            if pattern.regex.search(webpage.html):
-                self._set_detected_app(
-                    webpage.url, tech_fingerprint, "html", pattern, value=webpage.html
-                )
-                has_tech = True
+            try:
+                if pattern.regex.search(webpage.html):
+                    self._set_detected_app(
+                        webpage.url,
+                        tech_fingerprint,
+                        "html",
+                        pattern,
+                        value=webpage.html,
+                    )
+                    has_tech = True
+            except re.error as e:
+                print(f"Regex error in html pattern: {e}")
         # analyze dom patterns
         # print(f"Analyzing DOM patterns for technology {tech_fingerprint.name}")
         # css selector, list of css selectors, or dict from css selector to dict with some of keys:
@@ -261,7 +285,7 @@ class Wappalyzer:
         #           - "text": "regex": check if the .innerText property of the element that matches the css selector matches the regex (with version extraction).
         #           - "attributes": {dict from attr name to regex}: check if the attribute value of the element that matches the css selector matches the regex (with version extraction).
         # analyze dom patterns signal
-        selector_unique_check_set = list()
+        selector_unique_check_set = set()
         try:
             for idx, selector in enumerate(tech_fingerprint.dom):
                 print(
@@ -269,22 +293,15 @@ class Wappalyzer:
                 )
 
                 try:
-                    # Add timeout for select operation
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("Selector search timed out")
-
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(5)  # 5 second timeout for selector
-
+                    _future = self._executor.submit(
+                        list, webpage.select(selector.selector)
+                    )
                     try:
-                        items = list(webpage.select(selector.selector))
-                        signal.alarm(0)  # Cancel alarm
-                    except TimeoutError:
-                        signal.alarm(0)
-                        print(f"⚠️  Timeout on selector: {selector.selector[:100]}")
+                        items = _future.result(timeout=5)
+                    except concurrent.futures.TimeoutError:
+                        print(f"Timeout on selector: {selector.selector[:100]}")
                         continue
                     except Exception as e:
-                        signal.alarm(0)
                         print(f"Error selecting elements: {e}")
                         continue
 
@@ -297,10 +314,12 @@ class Wappalyzer:
                             print(f"Skipping remaining items (processed 100)")
                             break
 
-                        inner_html_len = len(item.inner_html)
-                        print(
-                            f"Processing item {item_idx+1}/{len(items)} with inner_html length {inner_html_len}"
-                        )
+                        try:
+                            inner_html = item.inner_html
+                        except Exception as e:
+                            print(f"Error getting inner_html: {e}")
+                            continue
+                        inner_html_len = len(inner_html)
 
                         if selector.exists:
                             self._set_detected_app(
@@ -334,8 +353,7 @@ class Wappalyzer:
 
                                     # Check case-insensitive if IGNORECASE flag is set
                                     match = (
-                                        item.inner_html.strip().lower()
-                                        == search_str.lower()
+                                        inner_html.strip().lower() == search_str.lower()
                                     )
 
                                     if match:
@@ -345,7 +363,7 @@ class Wappalyzer:
                                             tech_fingerprint,
                                             "dom",
                                             pattern,
-                                            value=item.inner_html,
+                                            value=inner_html,
                                         )
                                         has_tech = True
                                     # else:
@@ -356,13 +374,13 @@ class Wappalyzer:
                                     #     f"Using regex search for pattern: {pattern_str[:50]}"
                                     # )
                                     try:
-                                        if pattern.regex.search(item.inner_html):
+                                        if pattern.regex.search(inner_html):
                                             self._set_detected_app(
                                                 webpage.url,
                                                 tech_fingerprint,
                                                 "dom",
                                                 pattern,
-                                                value=item.inner_html,
+                                                value=inner_html,
                                             )
                                             has_tech = True
                                     except Exception as e:
@@ -378,17 +396,17 @@ class Wappalyzer:
                                 # print(
                                 #     f"selector_unique_check_set length: {len(selector_unique_check_set)}"
                                 # )
-                                selector_unique_check_set.append(check_str)
+                                selector_unique_check_set.add(check_str)
                                 # print(f"checking attribute {attrname} for patterns {check_str[:100]}")
                                 _content = item.attributes.get(attrname)
-                                if _content and len(_content) < 10000:
-                                    # if not isinstance(_content, str):
-                                    #     print("_content", _content)
+                                if _content:
                                     _content = (
                                         " ".join(_content)
                                         if isinstance(_content, list)
                                         else _content
                                     )
+                                    if not _content or len(_content) > 10000:
+                                        continue
                                     if "video" in _content:
                                         print(
                                             f"skipping video content {_content[:100]}"
@@ -449,7 +467,11 @@ class Wappalyzer:
 
         # Dectect version number
         if pattern.version:
-            allmatches = re.findall(pattern.regex, value)
+            try:
+                allmatches = re.findall(pattern.regex, value)
+            except re.error as e:
+                print(f"Regex error in version extraction: {e}")
+                return
             for i, matches in enumerate(allmatches):
                 version = pattern.version
                 # Check for a string to avoid enumerating the string
