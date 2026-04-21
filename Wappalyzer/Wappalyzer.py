@@ -6,7 +6,6 @@ import re
 import os
 import pathlib
 import threading
-import signal
 import time
 
 from typing import Optional
@@ -627,59 +626,34 @@ class Wappalyzer:
                 )
                 break
 
-            if threading.current_thread() is threading.main_thread():
+            _result: List[bool] = [False]
+            _exc: List[Exception] = []
 
-                def _timeout_handler(signum, frame):
-                    raise TimeoutError("Technology processing timed out")
-
-                previous_handler = signal.getsignal(signal.SIGALRM)
-                signal.signal(signal.SIGALRM, _timeout_handler)
-                signal.setitimer(signal.ITIMER_REAL, self._technology_timeout_seconds)
+            def _check_technology(_tech=technology, _out=_result, _err=_exc):
                 try:
-                    if self._has_technology(technology, webpage):
-                        detected_technologies.add(tech_name)
-                except TimeoutError:
-                    print(
-                        f"Timeout processing technology {tech_name} "
-                        f"after {self._technology_timeout_seconds}s"
-                    )
-                    continue
+                    _out[0] = self._has_technology(_tech, webpage)
                 except Exception as e:
-                    print(f"Error processing technology {tech_name}: {e}")
-                    continue
-                finally:
-                    signal.setitimer(signal.ITIMER_REAL, 0)
-                    signal.signal(signal.SIGALRM, previous_handler)
-            else:
-                # Fallback for non-main-thread callers where signal timeouts are unavailable.
-                _result: List[bool] = [False]
-                _exc: List[Exception] = []
+                    _err.append(e)
 
-                def _check_technology(_out=_result, _err=_exc):
-                    try:
-                        _out[0] = self._has_technology(technology, webpage)
-                    except Exception as e:
-                        _err.append(e)
+            _t = threading.Thread(target=_check_technology, daemon=True)
+            _t.start()
+            _t.join(timeout=self._technology_timeout_seconds)
 
-                _t = threading.Thread(target=_check_technology, daemon=True)
-                _t.start()
-                _t.join(timeout=self._technology_timeout_seconds)
-
-                if _t.is_alive():
-                    self._zombie_threads.append(_t)
-                    print(
-                        f"Timeout processing technology {tech_name} "
-                        f"after {self._technology_timeout_seconds}s"
-                    )
-                    continue
-                if _exc:
-                    print(f"Error processing technology {tech_name}: {_exc[0]}")
-                    continue
-                if _result[0]:
-                    detected_technologies.add(tech_name)
+            if _t.is_alive():
+                self._zombie_threads.append(_t)
+                print(
+                    f"Timeout processing technology {tech_name} "
+                    f"after {self._technology_timeout_seconds}s"
+                )
+                continue
+            if _exc:
+                print(f"Error processing technology {tech_name}: {_exc[0]}")
+                continue
+            if _result[0]:
+                detected_technologies.add(tech_name)
             if (tech_idx + 1) % 500 == 0:
                 print(
-                    f"Progress: {tech_idx + 1}/{len_techs} technologies analyzed. Currently detected technologies: {detected_technologies}"
+                    f"Progress: {tech_idx + 1}/{len_techs} technologies analyzed. {detected_technologies}/{tech_name}"
                 )
 
         print(f"Initially detected technologies: {detected_technologies}")
