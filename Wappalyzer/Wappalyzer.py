@@ -77,8 +77,7 @@ class Wappalyzer:
         self._technology_timeout_seconds = 10
         self._dom_selector_limit = 400
         self._dom_time_budget_seconds = 3.0
-        self._analyze_time_budget_seconds = 45.0
-        self._technology_scan_limit = 2000
+        self._analyze_time_budget_seconds = 60.0
         self._debug_dom_progress = False
 
         self._confidence_regexp = re.compile(r"(.+)\\;confidence:(\d+)")
@@ -604,15 +603,7 @@ class Wappalyzer:
         detected_technologies = set()
         analyze_start = time.monotonic()
 
-        for tech_idx, (tech_name, technology) in enumerate(
-            list(self.technologies.items())
-        ):
-            if tech_idx >= self._technology_scan_limit:
-                print(
-                    f"Stopping analyze: technology scan limit reached "
-                    f"({self._technology_scan_limit})"
-                )
-                break
+        for tech_name, technology in self.technologies.items():
 
             if (time.monotonic() - analyze_start) > self._analyze_time_budget_seconds:
                 print(
