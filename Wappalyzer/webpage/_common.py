@@ -98,7 +98,7 @@ class BaseWebPage(IWebPage):
         :param timeout: (optional) How many seconds to wait for the server to send data before giving up. 
         :param proxies: (optional) Dictionary mapping protocol to the URL of the proxy.
         :param verify: (optional) Boolean, it controls whether we verify the SSL certificate validity. 
-        :param \*\*kwargs: Any other arguments are passed to `requests.get` method as well. 
+        :param **kwargs: Any other arguments are passed to `requests.get` method as well. 
         """
         response = requests.get(url, **kwargs)
         return cls.new_from_response(response)
@@ -135,7 +135,7 @@ class BaseWebPage(IWebPage):
         :param cookies: Dict. HTTP Cookies to send with the request (optional).
         :param timeout: Int. override the session's timeout (optional)
         :param proxy: Proxy URL, `str` or `yarl.URL` (optional).
-        :param \*\*kwargs: Any other arguments are passed to `aiohttp.ClientSession.get` method as well. 
+        :param **kwargs: Any other arguments are passed to `aiohttp.ClientSession.get` method as well. 
 
         """
 

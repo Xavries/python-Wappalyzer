@@ -5,7 +5,7 @@ import pkg_resources
 import re
 import os
 import pathlib
-import concurrent.futures
+import threading
 
 from typing import Optional
 
@@ -70,7 +70,8 @@ class Wappalyzer:
             k: Fingerprint(name=k, **v) for k, v in technologies.items()
         }
         self.detected_technologies: Dict[str, Dict[str, Technology]] = {}
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self._zombie_threads: List[threading.Thread] = []
+        self._zombie_thread_cap = 10
 
         self._confidence_regexp = re.compile(r"(.+)\\;confidence:(\d+)")
 
@@ -125,7 +126,7 @@ class Wappalyzer:
                     logger.info("python-Wappalyzer technologies.json file updated")
 
             except Exception as err:  # Or loads default
-                logger.warning(
+                print(
                     "Could not download latest Wappalyzer technologies.json file because of error : '{}'. Using default. ".format(
                         err
                     )
@@ -286,28 +287,37 @@ class Wappalyzer:
         #           - "attributes": {dict from attr name to regex}: check if the attribute value of the element that matches the css selector matches the regex (with version extraction).
         # analyze dom patterns signal
         selector_unique_check_set = set()
+        # Purge any zombie threads that have since finished
+        self._zombie_threads = [t for t in self._zombie_threads if t.is_alive()]
+        if len(self._zombie_threads) >= self._zombie_thread_cap:
+            print(
+                f"Skipping DOM analysis: {len(self._zombie_threads)} hung selector "
+                f"threads already active (cap={self._zombie_thread_cap})"
+            )
+            return has_tech
         try:
             for idx, selector in enumerate(tech_fingerprint.dom):
-                print(
-                    f"Processing DOM selector {idx+1}/{len(tech_fingerprint.dom)}: {selector.selector[:100]}"
-                )
-
                 try:
-                    _future = self._executor.submit(
-                        list, webpage.select(selector.selector)
-                    )
-                    try:
-                        items = _future.result(timeout=5)
-                    except concurrent.futures.TimeoutError:
+                    _result: List[Any] = []
+                    _exc: List[Exception] = []
+
+                    def _do_select(_sel=selector.selector, _out=_result, _err=_exc):
+                        try:
+                            _out.extend(webpage.select(_sel))
+                        except Exception as e:
+                            _err.append(e)
+
+                    _t = threading.Thread(target=_do_select, daemon=True)
+                    _t.start()
+                    _t.join(timeout=5)
+                    if _t.is_alive():
+                        self._zombie_threads.append(_t)
                         print(f"Timeout on selector: {selector.selector[:100]}")
                         continue
-                    except Exception as e:
-                        print(f"Error selecting elements: {e}")
+                    if _exc:
+                        print(f"Error selecting elements: {_exc[0]}")
                         continue
-
-                    print(
-                        f"Found {len(items)} elements for selector: {selector.selector[:100]}"
-                    )
+                    items = _result
 
                     for item_idx, item in enumerate(items):
                         if item_idx > 100:  # Limit number of items processed
