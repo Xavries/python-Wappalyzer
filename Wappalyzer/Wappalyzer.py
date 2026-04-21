@@ -293,14 +293,6 @@ class Wappalyzer:
         #           - "attributes": {dict from attr name to regex}: check if the attribute value of the element that matches the css selector matches the regex (with version extraction).
         # analyze dom patterns signal
         selector_unique_check_set = set()
-        # Purge any zombie threads that have since finished
-        self._zombie_threads = [t for t in self._zombie_threads if t.is_alive()]
-        if len(self._zombie_threads) >= self._zombie_thread_cap:
-            print(
-                f"Skipping DOM analysis: {len(self._zombie_threads)} hung selector "
-                f"threads already active (cap={self._zombie_thread_cap})"
-            )
-            return has_tech
 
         _dom_start_time = time.monotonic()
         for idx, selector in enumerate(tech_fingerprint.dom):
@@ -415,13 +407,7 @@ class Wappalyzer:
                 except Exception as e:
                     _err.append(e)
 
-            _t = threading.Thread(target=_process_selector, daemon=True)
-            _t.start()
-            _t.join(timeout=5)
-            if _t.is_alive():
-                self._zombie_threads.append(_t)
-                print(f"Timeout on selector: {selector.selector[:100]}")
-                continue
+            _process_selector()
             if _exc:
                 print(f"Error in selector {selector.selector[:100]}: {_exc[0]}")
                 continue
