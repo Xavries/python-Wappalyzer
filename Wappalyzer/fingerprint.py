@@ -4,7 +4,6 @@ Classes to load and prepare technology fingerprints.
 This module is an implementation detail and is not considered public API.
 """
 
-import sre_compile
 import re
 import logging
 from typing import Optional, Optional, Union, Mapping, Dict, List, Any
@@ -26,7 +25,7 @@ class Pattern:
         confidence: Optional[str] = None,
     ) -> None:
         self.string: str = string
-        self.regex: "re.Pattern" = regex or sre_compile.compile("", 0)
+        self.regex: "re.Pattern" = regex or re.compile("")
         self.version: Optional[str] = version
         self.confidence: int = int(confidence) if confidence else 100
 
