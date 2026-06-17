@@ -1,7 +1,7 @@
 from typing import Callable, Dict, Iterable, List, Any, Mapping, Set
 import json
 import logging
-import pkg_resources
+import importlib.resources
 import re
 import os
 import pathlib
@@ -102,7 +102,7 @@ class Wappalyzer:
         :param update: Download and use the latest ``technologies.json`` file
             from `AliasIO/wappalyzer <https://github.com/AliasIO/wappalyzer>`_ repository.
         """
-        default = pkg_resources.resource_string(__name__, "data/technologies.json")
+        default = importlib.resources.files(__name__).joinpath("data/technologies.json").read_bytes()
 
         if technologies_file:
             with open(technologies_file, "r", encoding="utf-8") as fd:
@@ -199,7 +199,7 @@ class Wappalyzer:
         # HTML for last
 
         # analyze url patterns
-        # print(f"Analyzing URL patterns for technology {tech_fingerprint.name}")
+        # print(f"[check] {tech_fingerprint.name}: url")
         for pattern in tech_fingerprint.url:
             try:
                 if pattern.regex.search(webpage.url):
@@ -209,7 +209,7 @@ class Wappalyzer:
             except re.error as e:
                 print(f"Regex error in url pattern: {e}")
         # analyze headers patterns
-        # print(f"Analyzing headers patterns for technology {tech_fingerprint.name}")
+        # print(f"[check] {tech_fingerprint.name}: headers")
         for name, patterns in list(tech_fingerprint.headers.items()):
             if name in webpage.headers:
                 content = webpage.headers[name]
@@ -230,7 +230,7 @@ class Wappalyzer:
                     except re.error as e:
                         print(f"Regex error in headers pattern: {e}")
         # analyze scripts patterns
-        # print(f"Analyzing scripts patterns for technology {tech_fingerprint.name}")
+        # print(f"[check] {tech_fingerprint.name}: scripts")
         for pattern in tech_fingerprint.scripts:
             for script in webpage.scripts:
                 if len(script) == 0 or len(script) > 10000:
@@ -248,7 +248,7 @@ class Wappalyzer:
                 except re.error as e:
                     print(f"Regex error in scripts pattern: {e}")
         # analyze meta patterns
-        # print(f"Analyzing meta patterns for technology {tech_fingerprint.name}")
+        # print(f"[check] {tech_fingerprint.name}: meta")
         for name, patterns in list(tech_fingerprint.meta.items()):
             if name in webpage.meta:
                 content = webpage.meta[name]
@@ -269,7 +269,7 @@ class Wappalyzer:
                     except re.error as e:
                         print(f"Regex error in meta pattern: {e}")
         # analyze html patterns
-        # print(f"Analyzing HTML patterns for technology {tech_fingerprint.name}")
+        # print(f"[check] {tech_fingerprint.name}: html")
         for pattern in tech_fingerprint.html:
             if len(webpage.html) == 0 or len(webpage.html) > 10000:
                 continue
@@ -286,7 +286,7 @@ class Wappalyzer:
             except re.error as e:
                 print(f"Regex error in html pattern: {e}")
         # analyze dom patterns
-        # print(f"Analyzing DOM patterns for technology {tech_fingerprint.name}")
+        # print(f"[check] {tech_fingerprint.name}: dom ({len(tech_fingerprint.dom)} selectors)")
         # css selector, list of css selectors, or dict from css selector to dict with some of keys:
         #           - "exists": "": only check if the selector matches somthing, equivalent to the list form.
         #           - "text": "regex": check if the .innerText property of the element that matches the css selector matches the regex (with version extraction).
@@ -296,6 +296,7 @@ class Wappalyzer:
 
         _dom_start_time = time.monotonic()
         for idx, selector in enumerate(tech_fingerprint.dom):
+            # print(f"[dom] {tech_fingerprint.name} [{idx}]: {selector.selector[:120]}")
             if idx >= self._dom_selector_limit:
                 print(
                     f"Stopping DOM checks for {tech_fingerprint.name}: "
@@ -320,7 +321,9 @@ class Wappalyzer:
                 _err=_exc,
             ):
                 try:
+                    # print(f"[dom-select] calling select: {_sel.selector[:120]}")
                     items = list(webpage.select(_sel.selector))
+                    # print(f"[dom-select] select done: {len(items)} items")
                     local_has_tech = False
                     if self._debug_dom_progress:
                         print(
@@ -637,7 +640,7 @@ class Wappalyzer:
                 continue
             if _result[0]:
                 detected_technologies.add(tech_name)
-            if (tech_idx + 1) % 500 == 0:
+            if (tech_idx + 1) % 500 == 0 or tech_idx > 4900:
                 print(
                     f"Progress: {tech_idx + 1}/{len_techs} technologies analyzed. {detected_technologies}/{tech_name}"
                 )
