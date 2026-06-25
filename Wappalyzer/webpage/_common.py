@@ -4,7 +4,8 @@ Wraps only the information strictly necessary to run the Wappalyzer engine.
 """
 
 import abc
-from typing import Iterable, List, Mapping, Any
+import re
+from typing import Dict, Iterable, List, Mapping, Any
 try:
     from typing import Protocol
 except ImportError:
@@ -17,8 +18,75 @@ from requests.structures import CaseInsensitiveDict
 def _raise_not_dict(obj:Any, name:str) -> None:
     try:
         list(obj.keys())
-    except AttributeError: 
+    except AttributeError:
         raise ValueError(f"{name} must be a dictionary-like object")
+
+# Split a (possibly comma-merged) Set-Cookie header into individual cookies.
+# Only split on a comma that introduces a new "<token>=" cookie, so commas that
+# appear inside an Expires date (e.g. "Wed, 09 Jun 2021 ...") are preserved.
+_SET_COOKIE_SPLIT_RE = re.compile(r',\s*(?=[^\x00-\x20()<>@,;:\\"/\[\]?={}]+=)')
+
+
+def _set_cookie_values(headers: Any) -> List[str]:
+    """Return every ``Set-Cookie`` header value from a headers mapping.
+
+    Handles multi-valued mappings that keep each header separate (aiohttp's
+    ``CIMultiDict``, ``http.client`` messages, urllib3) as well as single-valued
+    mappings (plain ``dict``, requests' ``CaseInsensitiveDict``) where multiple
+    ``Set-Cookie`` headers have been comma-merged into one string.
+    """
+    if headers is None:
+        return []
+    # Multi-valued mappings expose all values for a key via one of these.
+    for attr in ("getall", "get_all", "getlist"):
+        getter = getattr(headers, attr, None)
+        if callable(getter):
+            try:
+                values = getter("Set-Cookie")
+            except TypeError:
+                # multidict.getall has no implicit default
+                values = getter("Set-Cookie", [])
+            except Exception:
+                values = None
+            if values:
+                return list(values)
+            break
+    # Single-valued mapping: look the header up case-insensitively.
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        for key in ("Set-Cookie", "set-cookie"):
+            try:
+                value = getter(key)
+            except Exception:
+                value = None
+            if value:
+                return [value] if isinstance(value, str) else list(value)
+    return []
+
+
+def _parse_set_cookie(raw: Any) -> Dict[str, str]:
+    """Parse ``Set-Cookie`` header value(s) into a ``{name: value}`` dict.
+
+    ``raw`` may be ``None``, a single header string (which can itself carry
+    several comma-merged cookies), or a list of header strings.
+    """
+    if not raw:
+        return {}
+    values = raw if isinstance(raw, (list, tuple)) else [raw]
+    cookies: Dict[str, str] = {}
+    for value in values:
+        if not value:
+            continue
+        for chunk in _SET_COOKIE_SPLIT_RE.split(value):
+            # The cookie's name=value pair is everything before the first ';'.
+            name_value = chunk.split(";", 1)[0].strip()
+            if "=" not in name_value:
+                continue
+            name, _, val = name_value.partition("=")
+            name = name.strip()
+            if name:
+                cookies[name] = val.strip().strip('"')
+    return cookies
 
 class ITag(Protocol):
     """
@@ -73,15 +141,20 @@ class BaseWebPage(IWebPage):
         :param url: The web page URL.
         :param html: The web page content (HTML)
         :param headers: The HTTP response headers
-        :param cookies: The HTTP response cookies (name -> value), optional.
+        :param cookies: The HTTP response cookies (name -> value). If omitted,
+            they are parsed from the ``Set-Cookie`` header(s) in ``headers``.
         """
         _raise_not_dict(headers, "headers")
         if cookies is not None:
             _raise_not_dict(cookies, "cookies")
+        else:
+            # Derive cookies from the response's Set-Cookie header(s), correctly
+            # handling the case of multiple cookies in one or more headers.
+            cookies = _parse_set_cookie(_set_cookie_values(headers))
         self.url = url
         self.html = html
         self.headers = CaseInsensitiveDict(headers)
-        self.cookies = CaseInsensitiveDict(cookies or {})
+        self.cookies = CaseInsensitiveDict(cookies)
         self.scripts: List[str] = []
         self.meta: Mapping[str, str] = {}
         self._parse_html()

@@ -103,9 +103,16 @@ What's new
 
 in development
 ^^^^^^^^^^^^^^
-* Add support for the "dom" key in technologies JSON.
+* Add support for the "dom" key in technologies JSON. The ``properties`` sub-key
+  is intentionally not supported: it reads runtime JS/DOM properties, which needs
+  a browser, and the only technology using it (React) is already detected via its
+  ``scripts``/``html`` patterns.
 * Add support for the "cookies" key in technologies JSON (matched against the
   HTTP response cookies; ``WebPage`` now exposes a ``cookies`` attribute).
+* Parse cookies properly from one or more ``Set-Cookie`` response headers,
+  including the case where several cookies are comma-merged into a single header
+  (commas inside an ``Expires`` date are not mistaken for cookie boundaries).
+  ``WebPage`` derives its ``cookies`` from ``Set-Cookie`` when none are passed.
 * Add an opt-in best-effort heuristic for the "js" key
   (``analyze(..., js_heuristic=True)`` / ``--js-heuristic``). It searches the
   page for each JavaScript property path; off by default because, without a JS

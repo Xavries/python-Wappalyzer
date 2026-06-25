@@ -360,6 +360,24 @@ def test_analyze_cookies_case_insensitive_name():
     analyzer = Wappalyzer(categories={}, technologies={'a': {'cookies': {'AWSALB': ''}}})
     assert analyzer.analyze(webpage) == {"a"}
 
+def test_webpage_parses_set_cookie_header():
+    # When cookies are not passed explicitly, they are parsed from Set-Cookie.
+    # Two cookies are comma-merged into one header and the Expires date contains
+    # a comma that must NOT be treated as a cookie boundary.
+    headers = {'Set-Cookie': 'sessionid=abc; Path=/; '
+                             'Expires=Wed, 09 Jun 2021 10:18:14 GMT, '
+                             'csrftoken=xyz; Path=/; HttpOnly'}
+    webpage = WebPage('http://example.com', '<html></html>', headers)
+    assert webpage.cookies['sessionid'] == 'abc'
+    assert webpage.cookies['csrftoken'] == 'xyz'
+
+def test_analyze_cookies_from_set_cookie_header():
+    # End-to-end: a technology is detected from a cookie carried in Set-Cookie.
+    headers = {'Set-Cookie': 'AWSALB=q; Path=/, other=1'}
+    webpage = WebPage('http://example.com', '<html></html>', headers)
+    analyzer = Wappalyzer(categories={}, technologies={'a': {'cookies': {'AWSALB': ''}}})
+    assert analyzer.analyze(webpage) == {"a"}
+
 def test_analyze_js_off_by_default():
     # The js heuristic must NOT run unless explicitly enabled, so a js-only
     # technology stays undetected by default (no precision regression).
@@ -415,8 +433,12 @@ def cli(*args):
 
 @pytest.mark.skipif(os.getenv('GITHUB_ACTIONS') is not None, reason="This test fails on the github CI, python3.9 for some reason.")
 def test_cli():
+    # End-to-end smoke test of the CLI: it must run with --update and print a
+    # single, well-formed JSON object mapping each detected technology to its
+    # versions/categories. We deliberately do NOT assert a specific technology,
+    # since that depends on the live third-party site's current stack.
     r = cli('http://exemple.com', '--update', '--user-agent', 'Mozilla/5.0', '--timeout', '30')
-    assert len(r) > 2
-    assert "Bootstrap" in r
+    assert isinstance(r, dict) and len(r) > 2
+    assert all(set(meta) == {"versions", "categories"} for meta in r.values())
 
 
