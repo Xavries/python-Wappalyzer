@@ -1,6 +1,9 @@
 import requests
 import json
+import logging
 from typing import Dict, List
+
+logger = logging.getLogger(name="python-Wappalyzer")
 
 WappalyzerRoot = "https://raw.githubusercontent.com/enthec/webappanalyzer/main/src"
 
@@ -40,15 +43,15 @@ def fetch_technologies(files: List[str]) -> Dict[str, Dict]:
     # Loop is fast enough anyway, but threads could stuck
     for f in files:
         url = f"{WappalyzerRoot}/technologies/{f}.json"
-        print(f"Fetching {url}")
+        logger.debug(f"Fetching {url}")
         try:
             resp = requests.get(url)
             resp.raise_for_status()
             m = resp.json()
             technologies.update(m)
-            print(f"Successfully fetched {url}")
+            logger.debug(f"Successfully fetched {url}")
         except Exception as e:
-            print(f"Failed to download or parse {f}.json: {e}")
+            logger.warning(f"Failed to download or parse {f}.json: {e}")
 
     return technologies
 
@@ -66,7 +69,7 @@ def fetch_categories() -> Dict[str, Dict]:
         resp.raise_for_status()
         categories = resp.json()
     except Exception as e:
-        print(f"Failed to download or parse categories.json: {e}")
+        logger.warning(f"Failed to download or parse categories.json: {e}")
         return {}
     return categories
 

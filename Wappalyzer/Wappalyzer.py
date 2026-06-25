@@ -111,8 +111,6 @@ class Wappalyzer:
                 "Using local technologies.json file at {}".format(technologies_file)
             )
         elif update:
-            _technologies_file: pathlib.Path
-
             # Get the lastest file
             try:
                 lastest_technologies_file_dict = get_technology_data()
@@ -130,19 +128,18 @@ class Wappalyzer:
                 with _technologies_file.open("w", encoding="utf-8") as tfile:
                     json.dump(lastest_technologies_file_dict, tfile)
                     logger.info("python-Wappalyzer technologies.json file updated")
-
-            except Exception as err:  # Or loads default
-                print(
-                    "Could not download latest Wappalyzer technologies.json file because of error : '{}'. Using default. ".format(
-                        err
+                logger.debug(
+                    "Using technologies.json file at {}".format(
+                        _technologies_file.as_posix()
                     )
                 )
-                lastest_technologies_file_dict = json.loads(default)
-            logger.debug(
-                "Using technologies.json file at {}".format(
-                    _technologies_file.as_posix()
+
+            except Exception as err:  # Or loads default
+                logger.warning(
+                    "Could not download latest Wappalyzer technologies.json file "
+                    "because of error : '{}'. Using default.".format(err)
                 )
-            )
+                lastest_technologies_file_dict = json.loads(default)
         else:
             lastest_technologies_file_dict = json.loads(default)
 
@@ -189,9 +186,19 @@ class Wappalyzer:
             existent_files.append(potential_paths[0])
         return existent_files
 
-    def _has_technology(self, tech_fingerprint: Fingerprint, webpage: IWebPage) -> bool:
+    def _has_technology(
+        self,
+        tech_fingerprint: Fingerprint,
+        webpage: IWebPage,
+        js_heuristic: bool = False,
+    ) -> bool:
         """
         Determine whether the web page matches the technology signature.
+
+        :param js_heuristic: When True, additionally run the best-effort ``js``
+            heuristic. It is off by default because, lacking a JS runtime, it can
+            only look for the property path as text in the page (false positives
+            possible) and cannot read the runtime value (no version extraction).
         """
 
         has_tech = False
@@ -207,7 +214,7 @@ class Wappalyzer:
                         webpage.url, tech_fingerprint, "url", pattern, value=webpage.url
                     )
             except re.error as e:
-                print(f"Regex error in url pattern: {e}")
+                logger.debug(f"Regex error in url pattern: {e}")
         # analyze headers patterns
         # print(f"[check] {tech_fingerprint.name}: headers")
         for name, patterns in list(tech_fingerprint.headers.items()):
@@ -228,7 +235,29 @@ class Wappalyzer:
                             )
                             has_tech = True
                     except re.error as e:
-                        print(f"Regex error in headers pattern: {e}")
+                        logger.debug(f"Regex error in headers pattern: {e}")
+        # analyze cookies patterns
+        # Most cookie patterns are name-existence checks (empty regex), so an
+        # empty cookie value must NOT be skipped the way headers/meta are.
+        for name, patterns in list(tech_fingerprint.cookies.items()):
+            if name in webpage.cookies:
+                content = webpage.cookies[name]
+                if len(content) > 10000:
+                    continue
+                for pattern in patterns:
+                    try:
+                        if pattern.regex.search(content):
+                            self._set_detected_app(
+                                webpage.url,
+                                tech_fingerprint,
+                                "cookies",
+                                pattern,
+                                value=content,
+                                key=name,
+                            )
+                            has_tech = True
+                    except re.error as e:
+                        logger.debug(f"Regex error in cookies pattern: {e}")
         # analyze scripts patterns
         # print(f"[check] {tech_fingerprint.name}: scripts")
         for pattern in tech_fingerprint.scripts:
@@ -246,7 +275,7 @@ class Wappalyzer:
                         )
                         has_tech = True
                 except re.error as e:
-                    print(f"Regex error in scripts pattern: {e}")
+                    logger.debug(f"Regex error in scripts pattern: {e}")
         # analyze meta patterns
         # print(f"[check] {tech_fingerprint.name}: meta")
         for name, patterns in list(tech_fingerprint.meta.items()):
@@ -267,7 +296,7 @@ class Wappalyzer:
                             )
                             has_tech = True
                     except re.error as e:
-                        print(f"Regex error in meta pattern: {e}")
+                        logger.debug(f"Regex error in meta pattern: {e}")
         # analyze html patterns
         # print(f"[check] {tech_fingerprint.name}: html")
         for pattern in tech_fingerprint.html:
@@ -284,7 +313,7 @@ class Wappalyzer:
                     )
                     has_tech = True
             except re.error as e:
-                print(f"Regex error in html pattern: {e}")
+                logger.debug(f"Regex error in html pattern: {e}")
         # analyze dom patterns
         # print(f"[check] {tech_fingerprint.name}: dom ({len(tech_fingerprint.dom)} selectors)")
         # css selector, list of css selectors, or dict from css selector to dict with some of keys:
@@ -298,13 +327,13 @@ class Wappalyzer:
         for idx, selector in enumerate(tech_fingerprint.dom):
             # print(f"[dom] {tech_fingerprint.name} [{idx}]: {selector.selector[:120]}")
             if idx >= self._dom_selector_limit:
-                print(
+                logger.debug(
                     f"Stopping DOM checks for {tech_fingerprint.name}: "
                     f"selector limit reached ({self._dom_selector_limit})"
                 )
                 break
             if (time.monotonic() - _dom_start_time) > self._dom_time_budget_seconds:
-                print(
+                logger.debug(
                     f"Stopping DOM checks for {tech_fingerprint.name}: "
                     f"time budget reached ({self._dom_time_budget_seconds}s)"
                 )
@@ -326,25 +355,25 @@ class Wappalyzer:
                     # print(f"[dom-select] select done: {len(items)} items")
                     local_has_tech = False
                     if self._debug_dom_progress:
-                        print(
+                        logger.debug(
                             f"[debug] selector-start len(items)={len(items)} selector={_sel.selector[:120]}"
                         )
                     for item_idx, item in enumerate(items):
                         if item_idx > 100:  # Limit number of items processed
                             if self._debug_dom_progress:
-                                print(
+                                logger.debug(
                                     f"[debug] item-limit-hit item_idx={item_idx} selector={_sel.selector[:120]}"
                                 )
-                            print(f"Skipping remaining items (processed 100)")
+                            logger.debug(f"Skipping remaining items (processed 100)")
                             if self._debug_dom_progress:
-                                print(
+                                logger.debug(
                                     f"[debug] breaking-item-loop selector={_sel.selector[:120]}"
                                 )
                             break
                         try:
                             inner_html = item.inner_html
                         except Exception as e:
-                            print(f"Error getting inner_html: {e}")
+                            logger.debug(f"Error getting inner_html: {e}")
                             continue
                         inner_html_len = len(inner_html)
 
@@ -378,7 +407,7 @@ class Wappalyzer:
                                             _out.append(True)
                                             local_has_tech = True
                                     except re.error as e:
-                                        print(f"Regex error in dom text: {e}")
+                                        logger.debug(f"Regex error in dom text: {e}")
                         if _sel.attributes:
                             for attrname, patterns in list(_sel.attributes.items()):
                                 check_str = f"{_sel.selector} {attrname} {[str(i.regex) for i in patterns]}"
@@ -400,9 +429,9 @@ class Wappalyzer:
                                             _out.append(True)
                                             local_has_tech = True
                                     except re.error as e:
-                                        print(f"Regex error in dom attr: {e}")
+                                        logger.debug(f"Regex error in dom attr: {e}")
                     if self._debug_dom_progress:
-                        print(
+                        logger.debug(
                             f"[debug] selector-loop-exit selector={_sel.selector[:120]}"
                         )
                     if local_has_tech:
@@ -412,7 +441,7 @@ class Wappalyzer:
 
             _process_selector()
             if _exc:
-                print(f"Error in selector {selector.selector[:100]}: {_exc[0]}")
+                logger.debug(f"Error in selector {selector.selector[:100]}: {_exc[0]}")
                 continue
             if _matches:
                 # Record the detection — done in main thread to avoid races on
@@ -425,6 +454,31 @@ class Wappalyzer:
                     value="",
                 )
                 has_tech = True
+
+        # analyze js patterns (opt-in best-effort heuristic)
+        # Without a JS runtime we cannot read window.<path>'s value, so we only
+        # check whether the property path appears as a token in the page (which
+        # includes inline <script> bodies). Value-regex/version are not evaluated;
+        # the declared confidence is preserved.
+        if js_heuristic and tech_fingerprint.js and 0 < len(webpage.html) <= 2_000_000:
+            for prop_path, patterns in list(tech_fingerprint.js.items()):
+                try:
+                    # Token-anchored so e.g. "AOS.init" does not match "AOS.initialize".
+                    if re.search(
+                        r"(?<![\w.$])" + re.escape(prop_path) + r"(?![\w$])",
+                        webpage.html,
+                    ):
+                        confidence = max((p.confidence for p in patterns), default=100)
+                        self._set_detected_app(
+                            webpage.url,
+                            tech_fingerprint,
+                            "js",
+                            Pattern(string=prop_path, confidence=str(confidence)),
+                            value="",
+                        )
+                        has_tech = True
+                except re.error as e:
+                    logger.debug(f"Regex error in js heuristic: {e}")
 
         # print(f"has_tech: {has_tech} for technology {tech_fingerprint.name}")
         return has_tech
@@ -462,7 +516,7 @@ class Wappalyzer:
             try:
                 allmatches = re.findall(pattern.regex, value)
             except re.error as e:
-                print(f"Regex error in version extraction: {e}")
+                logger.debug(f"Regex error in version extraction: {e}")
                 return
             for i, matches in enumerate(allmatches):
                 version = pattern.version
@@ -495,7 +549,7 @@ class Wappalyzer:
         """
         Sort version number (find the longest version number that *is supposed to* contains all shorter detected version numbers).
         """
-        if len(detected_tech.versions) >= 1:
+        if len(detected_tech.versions) <= 1:
             return
         detected_tech.versions = sorted(
             detected_tech.versions, key=self._cmp_to_key(self._sort_app_versions)
@@ -539,7 +593,7 @@ class Wappalyzer:
             all_implied_technologies.update(implied_technologies)
             implied_technologies = __get_implied_technologies(all_implied_technologies)
 
-        print(
+        logger.debug(
             f"Implied technologies len: {len(all_implied_technologies)}, self.technologies len: {len(self.technologies)}"
         )
         return all_implied_technologies
@@ -584,13 +638,17 @@ class Wappalyzer:
         except KeyError:
             return None
 
-    def analyze(self, webpage: IWebPage) -> Set[str]:
+    def analyze(self, webpage: IWebPage, js_heuristic: bool = False) -> Set[str]:
         """
         Return a set of technology that can be detected on the web page.
 
         :param webpage: The Webpage to analyze
+        :param js_heuristic: Enable the opt-in best-effort ``js`` heuristic. Off by
+            default. Without a JS runtime it can only search the page text for each
+            JavaScript property path, so it trades precision for extra reach (it can
+            surface technologies that expose no other signal). No version extraction.
         """
-        print(f"Analyzing webpage: {webpage.url}")
+        logger.debug(f"Analyzing webpage: {webpage.url}")
         detected_technologies = set()
         analyze_start = time.monotonic()
         len_techs = len(self.technologies)
@@ -600,27 +658,30 @@ class Wappalyzer:
         ):
 
             if (time.monotonic() - analyze_start) > self._analyze_time_budget_seconds:
-                print(
-                    f"Stopping analyze: time budget reached "
-                    f"({self._analyze_time_budget_seconds}s)"
+                logger.warning(
+                    f"Stopping analyze early ({tech_idx}/{len_techs} technologies "
+                    f"checked): time budget reached "
+                    f"({self._analyze_time_budget_seconds}s); results may be incomplete"
                 )
                 break
 
             self._zombie_threads = [t for t in self._zombie_threads if t.is_alive()]
             if len(self._zombie_threads) >= self._zombie_thread_cap:
-                print(
-                    f"Skipping remaining technologies: {len(self._zombie_threads)} "
+                logger.warning(
+                    f"Stopping analyze early: {len(self._zombie_threads)} "
                     f"hung worker threads already active "
-                    f"(cap={self._zombie_thread_cap})"
+                    f"(cap={self._zombie_thread_cap}); results may be incomplete"
                 )
                 break
 
             _result: List[bool] = [False]
             _exc: List[Exception] = []
 
-            def _check_technology(_tech=technology, _out=_result, _err=_exc):
+            def _check_technology(
+                _tech=technology, _out=_result, _err=_exc, _js=js_heuristic
+            ):
                 try:
-                    _out[0] = self._has_technology(_tech, webpage)
+                    _out[0] = self._has_technology(_tech, webpage, js_heuristic=_js)
                 except Exception as e:
                     _err.append(e)
 
@@ -630,37 +691,40 @@ class Wappalyzer:
 
             if _t.is_alive():
                 self._zombie_threads.append(_t)
-                print(
+                logger.debug(
                     f"Timeout processing technology {tech_name} "
                     f"after {self._technology_timeout_seconds}s"
                 )
                 continue
             if _exc:
-                print(f"Error processing technology {tech_name}: {_exc[0]}")
+                logger.debug(f"Error processing technology {tech_name}: {_exc[0]}")
                 continue
             if _result[0]:
                 detected_technologies.add(tech_name)
             if (tech_idx + 1) % 500 == 0 or tech_idx > 4900:
-                print(
+                logger.debug(
                     f"Progress: {tech_idx + 1}/{len_techs} technologies analyzed. {detected_technologies}/{tech_name}"
                 )
 
-        print(f"Initially detected technologies: {detected_technologies}")
+        logger.debug(f"Initially detected technologies: {detected_technologies}")
         detected_technologies.update(
             self._get_implied_technologies(detected_technologies)
         )
-        print(f"Initially detected technologies: {detected_technologies}")
-        print(f"Total: {len(detected_technologies)} technologies")
+        logger.debug(f"Detected technologies (incl. implied): {detected_technologies}")
+        logger.debug(f"Total: {len(detected_technologies)} technologies")
 
         return detected_technologies
 
-    def analyze_with_versions(self, webpage: IWebPage) -> Dict[str, Dict[str, Any]]:
+    def analyze_with_versions(
+        self, webpage: IWebPage, js_heuristic: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Return a dict of applications and versions that can be detected on the web page.
 
         :param webpage: The Webpage to analyze
+        :param js_heuristic: See `analyze`.
         """
-        detected_apps = self.analyze(webpage)
+        detected_apps = self.analyze(webpage, js_heuristic=js_heuristic)
         versioned_apps = {}
 
         for app_name in detected_apps:
@@ -669,11 +733,14 @@ class Wappalyzer:
 
         return versioned_apps
 
-    def analyze_with_categories(self, webpage: IWebPage) -> Dict[str, Dict[str, Any]]:
+    def analyze_with_categories(
+        self, webpage: IWebPage, js_heuristic: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Return a dict of technologies and categories that can be detected on the web page.
 
         :param webpage: The Webpage to analyze
+        :param js_heuristic: See `analyze`.
 
         >>> wappalyzer.analyze_with_categories(webpage)
         {'Amazon ECS': {'categories': ['IaaS']},
@@ -682,7 +749,7 @@ class Wappalyzer:
         'Docker': {'categories': ['Containers']}}
 
         """
-        detected_technologies = self.analyze(webpage)
+        detected_technologies = self.analyze(webpage, js_heuristic=js_heuristic)
         categorised_technologies = {}
 
         for tech_name in detected_technologies:
@@ -692,12 +759,13 @@ class Wappalyzer:
         return categorised_technologies
 
     def analyze_with_versions_and_categories(
-        self, webpage: IWebPage
+        self, webpage: IWebPage, js_heuristic: bool = False
     ) -> Dict[str, Dict[str, Any]]:
         """
         Return a dict of applications and versions and categories that can be detected on the web page.
 
         :param webpage: The Webpage to analyze
+        :param js_heuristic: See `analyze`.
 
         >>> wappalyzer.analyze_with_versions_and_categories(webpage)
         {'Font Awesome': {'categories': ['Font scripts'], 'versions': ['5.4.2']},
@@ -709,7 +777,7 @@ class Wappalyzer:
         'Yoast SEO': {'categories': ['SEO'], 'versions': ['14.6.1']}}
 
         """
-        versioned_apps = self.analyze_with_versions(webpage)
+        versioned_apps = self.analyze_with_versions(webpage, js_heuristic=js_heuristic)
         versioned_and_categorised_apps = versioned_apps
 
         for app_name in versioned_apps:
@@ -758,6 +826,7 @@ def analyze(
     useragent: str = None,
     timeout: int = 10,
     verify: bool = True,
+    js_heuristic: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Quick utility method to analyze a website with minimal configurable options.
@@ -770,6 +839,8 @@ def analyze(
         - `useragent`: Request user agent
         - `timeout`: Request timeout
         - `verify`: SSL cert verify
+        - `js_heuristic`: Enable the opt-in best-effort ``js`` heuristic (see
+          `Wappalyzer.analyze`); off by default.
 
     :Return:
         `dict`. Just as `Wappalyzer.analyze_with_versions_and_categories`.
@@ -783,5 +854,7 @@ def analyze(
         headers["User-Agent"] = useragent
     webpage = WebPage.new_from_url(url, headers=headers, timeout=timeout, verify=verify)
     # Analyze
-    results = wappalyzer.analyze_with_versions_and_categories(webpage)
+    results = wappalyzer.analyze_with_versions_and_categories(
+        webpage, js_heuristic=js_heuristic
+    )
     return results

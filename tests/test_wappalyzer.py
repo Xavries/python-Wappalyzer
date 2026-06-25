@@ -211,7 +211,7 @@ def test_analyze_with_versions_and_categories():
 
     analyzer = Wappalyzer(categories=categories, technologies=technologies)
     result = analyzer.analyze_with_versions_and_categories(webpage)
-    assert analyzer.get_versions(webpage.url, 'WordPress') == ["5.4.2"], analyzer._detected_technologies[webpage.url]
+    assert analyzer.get_versions(webpage.url, 'WordPress') == ["5.4.2"], analyzer.detected_technologies[webpage.url]
     assert ("WordPress", {"categories": ["CMS", "Blog"], "versions": ["5.4.2"]}) in result.items()
 
 def test_analyze_with_versions_and_categories_pattern_lists():
@@ -339,6 +339,43 @@ def test_analyze_dom_dict_attributes():
     assert analyzer.analyze(webpageA) == {"a"}
     assert analyzer.analyze(webpageB) == {"b"}
 
+def test_analyze_cookies():
+    # Existence check on the cookie name (empty pattern) plus a value-regex check.
+    webpageA = WebPage('http://example.com', '<html></html>', {}, cookies={'AWSALB': 'whatever'})
+    webpageB = WebPage('http://example.com', '<html></html>', {}, cookies={'sessionId': 'deadbeef'})
+    webpageC = WebPage('http://example.com', '<html></html>', {}, cookies={'sessionId': 'NOT-HEX!!'})
+    categories = {}
+    technologies = {
+        'a': {'cookies': {'AWSALB': ''}},
+        'b': {'cookies': {'sessionId': '^[a-f0-9]+$'}},
+    }
+    analyzer = Wappalyzer(categories=categories, technologies=technologies)
+    assert analyzer.analyze(webpageA) == {"a"}
+    assert analyzer.analyze(webpageB) == {"b"}
+    assert analyzer.analyze(webpageC) == set()   # value regex must fail
+
+def test_analyze_cookies_case_insensitive_name():
+    # Real-world cookie casing differs from the fingerprint's declared casing.
+    webpage = WebPage('http://example.com', '<html></html>', {}, cookies={'awsalb': ''})
+    analyzer = Wappalyzer(categories={}, technologies={'a': {'cookies': {'AWSALB': ''}}})
+    assert analyzer.analyze(webpage) == {"a"}
+
+def test_analyze_js_off_by_default():
+    # The js heuristic must NOT run unless explicitly enabled, so a js-only
+    # technology stays undetected by default (no precision regression).
+    webpage = WebPage('http://example.com', '<html><script>AOS.init({})</script></html>', {})
+    analyzer = Wappalyzer(categories={}, technologies={'a': {'js': {'AOS.init': ''}}})
+    assert analyzer.analyze(webpage) == set()
+
+def test_analyze_js_heuristic():
+    # property path present in an inline <script> body -> detected when enabled
+    hit = WebPage('http://example.com', '<html><script>AOS.init({})</script></html>', {})
+    # token anchoring: "AOS.initialize" must not satisfy "AOS.init"
+    miss = WebPage('http://example.com', '<html><script>AOS.initialize()</script></html>', {})
+    analyzer = Wappalyzer(categories={}, technologies={'a': {'js': {'AOS.init': ''}}})
+    assert analyzer.analyze(hit, js_heuristic=True) == {"a"}
+    assert analyzer.analyze(miss, js_heuristic=True) == set()
+
 def test_analyze_scriptSrc():
     ...
     #TODO
@@ -365,7 +402,7 @@ def test_fingerprint():
             "website": "https://wordpress.org"
             })
     assert tech_fingerprint.meta['generator'][-2].version == '\\1'
-    assert tech_fingerprint.meta['generator'][-2].regex.pattern == '^WordPress ?([\d.]+)?'
+    assert tech_fingerprint.meta['generator'][-2].regex.pattern == r'^WordPress ?([\d.]+)?'
 
 def cli(*args):
     """Wrap python-Wappalyzer CLI exec"""

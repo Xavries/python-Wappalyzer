@@ -50,9 +50,10 @@ class IWebPage(Protocol):
     url: str
     html: str
     headers: Mapping[str, str]
+    cookies: Mapping[str, str]
     scripts: List[str]
     meta: Mapping[str, str]
-    def select(self, selector:str) -> Iterable[ITag]: 
+    def select(self, selector:str) -> Iterable[ITag]:
         raise NotImplementedError()
 
 class BaseWebPage(IWebPage):
@@ -61,9 +62,10 @@ class BaseWebPage(IWebPage):
 
     Subclasses must implement _parse_html() and select(string).
     """
-    def __init__(self, url:str, html:str, headers:Mapping[str, str]):
+    def __init__(self, url:str, html:str, headers:Mapping[str, str],
+                 cookies:Mapping[str, str]=None):
         """
-        Initialize a new WebPage object manually.  
+        Initialize a new WebPage object manually.
 
         >>> from Wappalyzer import WebPage
         >>> w = WebPage('exemple.com',  html='<strong>Hello World</strong>', headers={'Server': 'Apache', })
@@ -71,11 +73,15 @@ class BaseWebPage(IWebPage):
         :param url: The web page URL.
         :param html: The web page content (HTML)
         :param headers: The HTTP response headers
+        :param cookies: The HTTP response cookies (name -> value), optional.
         """
         _raise_not_dict(headers, "headers")
+        if cookies is not None:
+            _raise_not_dict(cookies, "cookies")
         self.url = url
         self.html = html
         self.headers = CaseInsensitiveDict(headers)
+        self.cookies = CaseInsensitiveDict(cookies or {})
         self.scripts: List[str] = []
         self.meta: Mapping[str, str] = {}
         self._parse_html()
@@ -111,7 +117,8 @@ class BaseWebPage(IWebPage):
 
         :param response: `requests.Response` object
         """
-        return cls(response.url, html=response.text, headers=response.headers)
+        return cls(response.url, html=response.text, headers=response.headers,
+                   cookies=response.cookies.get_dict())
 
 
     @classmethod
@@ -162,4 +169,6 @@ class BaseWebPage(IWebPage):
         :param response: `aiohttp.ClientResponse` object
         """
         html = await response.text()
-        return cls(str(response.url), html=html, headers=response.headers)
+        cookies = {name: morsel.value for name, morsel in response.cookies.items()}
+        return cls(str(response.url), html=html, headers=response.headers,
+                   cookies=cookies)

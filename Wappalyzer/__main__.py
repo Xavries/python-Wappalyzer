@@ -10,13 +10,19 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--user-agent', help='Request user agent', dest='useragent')
     parser.add_argument('--timeout', help='Request timeout', type=int, default=10)
     parser.add_argument('--no-verify', action='store_true', help='Skip SSL cert verify', dest='noverify')
+    parser.add_argument('--js-heuristic', action='store_true',
+                        help='Enable the opt-in best-effort js heuristic (more reach, '
+                             'may add false positives, no version extraction)',
+                        dest='js_heuristic')
     return parser
 
 def main(args) -> None:
     """Entrypoint
-    :param args: `Namespace` returned by `argparse.ArgumentParser.parse_args`. 
+    :param args: `Namespace` returned by `argparse.ArgumentParser.parse_args`.
     """
-    result = analyze(args.url, update=args.update, useragent=args.useragent, timeout=args.timeout, verify=not args.noverify)
+    result = analyze(args.url, update=args.update, useragent=args.useragent,
+                     timeout=args.timeout, verify=not args.noverify,
+                     js_heuristic=args.js_heuristic)
     print(json.dumps(result))
 
 if __name__ == '__main__':

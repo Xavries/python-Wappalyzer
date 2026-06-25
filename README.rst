@@ -104,8 +104,14 @@ What's new
 in development
 ^^^^^^^^^^^^^^
 * Add support for the "dom" key in technologies JSON.
+* Add support for the "cookies" key in technologies JSON (matched against the
+  HTTP response cookies; ``WebPage`` now exposes a ``cookies`` attribute).
+* Add an opt-in best-effort heuristic for the "js" key
+  (``analyze(..., js_heuristic=True)`` / ``--js-heuristic``). It searches the
+  page for each JavaScript property path; off by default because, without a JS
+  runtime, it trades precision for reach and cannot extract versions.
 * Fix case sensitivity of the WebPage headers.
-* Provide a fallback WebPage class that works without ``lxml``. 
+* Provide a fallback WebPage class that works without ``lxml``.
 
 python-Wappalyzer 0.4.0 (unreleased)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -120,4 +126,19 @@ python-Wappalyzer 0.3.x
 * Add confidence and version parsing.
 
 Note:
-    Last version to support Python2 was `0.2.2`.  
+    Last version to support Python2 was `0.2.2`.
+
+Supported technologies.json fields
+----------------------------------
+
+Detected from the HTTP response and parsed HTML:
+``url``, ``headers``, ``cookies``, ``meta``, ``html``, ``scripts``, ``dom``.
+
+Partly / not supported:
+
+* ``js`` — only via the opt-in ``js_heuristic`` (best effort; no JS runtime, so
+  no version extraction and possible false positives). Off by default.
+* ``dns`` — not supported: requires a DNS resolver, which is out of scope for the
+  HTTP-only ``WebPage`` model.
+* ``text`` — parsed but not evaluated (no technology in the current data uses it).
+* ``css``, ``robots``, ``xhr`` — not supported.

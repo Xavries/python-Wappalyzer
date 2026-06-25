@@ -6,7 +6,7 @@ This module is an implementation detail and is not considered public API.
 
 import re
 import logging
-from typing import Optional, Optional, Union, Mapping, Dict, List, Any
+from typing import Optional, Union, Mapping, Dict, List, Any
 
 logger = logging.getLogger(name="python-Wappalyzer")
 
@@ -104,7 +104,7 @@ class Fingerprint:
         self.saas: Optional[bool] = attrs.get("saas")  # type:ignore
         self.oss: Optional[bool] = attrs.get("oss")  # type:ignore
         self.pricing: List[str] = (
-            self._prepare_list(attrs["princing"]) if "princing" in attrs else []
+            self._prepare_list(attrs["pricing"]) if "pricing" in attrs else []
         )
 
         # Implies and cie
@@ -123,6 +123,9 @@ class Fingerprint:
         self.headers: Mapping[str, List[Pattern]] = (
             self._prepare_headers(attrs["headers"]) if "headers" in attrs else {}
         )
+        self.cookies: Mapping[str, List[Pattern]] = (
+            self._prepare_cookies(attrs["cookies"]) if "cookies" in attrs else {}
+        )
         self.meta: Mapping[str, List[Pattern]] = (
             self._prepare_meta(attrs["meta"]) if "meta" in attrs else {}
         )
@@ -130,6 +133,8 @@ class Fingerprint:
         self.html: List[Pattern] = (
             self._prepare_pattern(attrs["html"]) if "html" in attrs else []
         )
+        # `text` is parsed but NOT yet evaluated by the engine (no technology in
+        # the current data set uses it, so it would be untested dead matching code).
         self.text: List[Pattern] = (
             self._prepare_pattern(attrs["text"]) if "text" in attrs else []
         )
@@ -142,10 +147,14 @@ class Fingerprint:
         self.scripts: List[Pattern] = (
             self._prepare_pattern(attrs["scripts"]) if "scripts" in attrs else []
         )
+        # `js` maps a JavaScript global/property path to a value pattern. Faithful
+        # evaluation needs a JS runtime; the engine only uses these for an opt-in
+        # best-effort heuristic (see Wappalyzer.analyze(js_heuristic=True)).
+        self.js: Mapping[str, List[Pattern]] = (
+            self._prepare_js(attrs["js"]) if "js" in attrs else {}
+        )
 
-        # self.cookies: Mapping[str, List[Pattern]] Not supported
-        # self.dns: Mapping[str, List[Pattern]] Not supported
-        # self.js: Mapping[str, List[Pattern]] Not supported
+        # self.dns: Mapping[str, List[Pattern]] Not supported (needs a DNS resolver)
         # self.css: List[Pattern] Not supported (yet)
         # self.robots: List[Pattern] Not supported (yet)
         # self.xhr: List[Pattern] Not supported
@@ -220,6 +229,23 @@ class Fingerprint:
     ) -> Mapping[str, List[Pattern]]:
         # Enure lowercase keys
         return cls._prepare_pattern_dict({k.lower(): v for k, v in thing.items()})
+
+    @classmethod
+    def _prepare_cookies(
+        cls, thing: Dict[str, Union[str, List[str]]]
+    ) -> Mapping[str, List[Pattern]]:
+        # Cookie names are matched case-insensitively; values are regex patterns
+        # (most are empty strings, i.e. name-existence checks).
+        return cls._prepare_pattern_dict({k.lower(): v for k, v in thing.items()})
+
+    @classmethod
+    def _prepare_js(
+        cls, thing: Dict[str, Union[str, List[str]]]
+    ) -> Mapping[str, List[Pattern]]:
+        # JavaScript property paths are case-sensitive, so keys are kept verbatim.
+        # Values carry the version/confidence metadata; the engine's heuristic can
+        # only use confidence (it cannot read the runtime property value).
+        return cls._prepare_pattern_dict(dict(thing))
 
     @classmethod
     def _sanitize_dom_selector(cls, selector: str) -> Optional[str]:
