@@ -102,7 +102,11 @@ class Wappalyzer:
         :param update: Download and use the latest ``technologies.json`` file
             from `AliasIO/wappalyzer <https://github.com/AliasIO/wappalyzer>`_ repository.
         """
-        default = importlib.resources.files(__name__).joinpath("data/technologies.json").read_bytes()
+        default = (
+            importlib.resources.files(__name__)
+            .joinpath("data/technologies.json")
+            .read_bytes()
+        )
 
         if technologies_file:
             with open(technologies_file, "r", encoding="utf-8") as fd:
@@ -652,6 +656,12 @@ class Wappalyzer:
         detected_technologies = set()
         analyze_start = time.monotonic()
         len_techs = len(self.technologies)
+        # NOTE _zombie_threads is scoped to this page: without resetting it here, hung
+        # technology-check threads from any *earlier* page accumulate on the shared
+        # Wappalyzer instance across the whole run, so once the cap is hit once, every
+        # subsequent page silently skips all technology checks (fast, but wrong) instead
+        # of the intended "give up on this one bad page and move on" behavior.
+        self._zombie_threads = []
 
         for tech_idx, (tech_name, technology) in enumerate(
             list(self.technologies.items())
